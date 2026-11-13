@@ -1,0 +1,99 @@
+const BPS: u256 = 10_000
+
+pub struct Voltage {
+    pub microvolts: u64,
+}
+
+pub struct Resistor {
+    pub ohms: u64,
+    pub tolerance_bps: u64,
+}
+
+pub struct Assessment {
+    pub min_floor_uv: u256,
+    pub max_ceil_uv: u256,
+    pub within_limit: bool,
+}
+
+/// Bounds the output of an unloaded divider. Invalid inputs return None.
+pub fn assess(input_min: Voltage, input_max: Voltage, upper: Resistor, lower: Resistor, limit: Voltage) -> Option<Assessment> {
+    if input_min.microvolts > input_max.microvolts
+        || upper.ohms == 0 || lower.ohms == 0
+        || upper.tolerance_bps >= 10_000 || lower.tolerance_bps >= 10_000 {
+        return Option::None
+    }
+
+    let upper_nominal = upper.ohms as u256
+    let lower_nominal = lower.ohms as u256
+    let upper_tolerance = upper.tolerance_bps as u256
+    let lower_tolerance = lower.tolerance_bps as u256
+    let upper_min = upper_nominal * (BPS - upper_tolerance)
+    let upper_max = upper_nominal * (BPS + upper_tolerance)
+    let lower_min = lower_nominal * (BPS - lower_tolerance)
+    let lower_max = lower_nominal * (BPS + lower_tolerance)
+
+    let min_numerator = (input_min.microvolts as u256) * lower_min
+    let min_denominator = upper_max + lower_min
+    let max_numerator = (input_max.microvolts as u256) * lower_max
+    let max_denominator = upper_min + lower_max
+
+    Option::Some(Assessment {
+        min_floor_uv: min_numerator / min_denominator,
+        max_ceil_uv: (max_numerator + max_denominator - 1) / max_denominator,
+        within_limit: max_numerator <= (limit.microvolts as u256) * max_denominator,
+    })
+}
+
+#[test]
+fn nominally_safe_divider_can_exceed_limit() {
+    let result = assess(
+        input_min: Voltage { microvolts: 4_950_000 },
+        input_max: Voltage { microvolts: 4_950_000 },
+        upper: Resistor { ohms: 10_000, tolerance_bps: 100 },
+        lower: Resistor { ohms: 20_000, tolerance_bps: 100 },
+        limit: Voltage { microvolts: 3_300_000 },
+    ).unwrap()
+    assert!(result.min_floor_uv == 3_277_926)
+    assert!(result.max_ceil_uv == 3_321_927)
+    assert!(!result.within_limit)
+}
+
+#[test]
+fn exact_limit_is_inclusive() {
+    let result = assess(
+        input_min: Voltage { microvolts: 0 },
+        input_max: Voltage { microvolts: 10 },
+        upper: Resistor { ohms: 1, tolerance_bps: 0 },
+        lower: Resistor { ohms: 1, tolerance_bps: 0 },
+        limit: Voltage { microvolts: 5 },
+    ).unwrap()
+    assert!(result.min_floor_uv == 0)
+    assert!(result.max_ceil_uv == 5)
+    assert!(result.within_limit)
+}
+
+#[test]
+fn fractional_excess_fails() {
+    let result = assess(
+        input_min: Voltage { microvolts: 11 },
+        input_max: Voltage { microvolts: 11 },
+        upper: Resistor { ohms: 1, tolerance_bps: 0 },
+        lower: Resistor { ohms: 1, tolerance_bps: 0 },
+        limit: Voltage { microvolts: 5 },
+    ).unwrap()
+    assert!(result.min_floor_uv == 5)
+    assert!(result.max_ceil_uv == 6)
+    assert!(!result.within_limit)
+}
+
+#[test]
+fn rejects_zero_resistance() {
+    let result = assess(
+        input_min: Voltage { microvolts: 0 },
+        input_max: Voltage { microvolts: 10 },
+        upper: Resistor { ohms: 0, tolerance_bps: 0 },
+        lower: Resistor { ohms: 1, tolerance_bps: 0 },
+        limit: Voltage { microvolts: 5 },
+    )
+    assert!(result.is_none())
+}
