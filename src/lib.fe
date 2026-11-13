@@ -9,10 +9,34 @@ pub struct Resistor {
     pub tolerance_bps: u64,
 }
 
+pub struct Load {
+    pub ohms: u64,
+    pub tolerance_bps: u64,
+}
+
 pub struct Assessment {
     pub min_floor_uv: u256,
     pub max_ceil_uv: u256,
     pub within_limit: bool,
+}
+
+fn assessment_for_ratio_bounds(
+    input_min: Voltage,
+    input_max: Voltage,
+    min_ratio_numerator: u256,
+    min_ratio_denominator: u256,
+    max_ratio_numerator: u256,
+    max_ratio_denominator: u256,
+    limit: Voltage,
+) -> Assessment {
+    let min_numerator = (input_min.microvolts as u256) * min_ratio_numerator
+    let max_numerator = (input_max.microvolts as u256) * max_ratio_numerator
+
+    Assessment {
+        min_floor_uv: min_numerator / min_ratio_denominator,
+        max_ceil_uv: (max_numerator + max_ratio_denominator - 1) / max_ratio_denominator,
+        within_limit: max_numerator <= (limit.microvolts as u256) * max_ratio_denominator,
+    }
 }
 
 /// Bounds the output of an unloaded divider. Invalid inputs return None.
@@ -23,6 +47,7 @@ pub fn assess(input_min: Voltage, input_max: Voltage, upper: Resistor, lower: Re
         return Option::None
     }
 
+    // Retain the common scale factor until the ratio is formed.
     let upper_nominal = upper.ohms as u256
     let lower_nominal = lower.ohms as u256
     let upper_tolerance = upper.tolerance_bps as u256
@@ -32,16 +57,59 @@ pub fn assess(input_min: Voltage, input_max: Voltage, upper: Resistor, lower: Re
     let lower_min = lower_nominal * (BPS - lower_tolerance)
     let lower_max = lower_nominal * (BPS + lower_tolerance)
 
-    let min_numerator = (input_min.microvolts as u256) * lower_min
     let min_denominator = upper_max + lower_min
-    let max_numerator = (input_max.microvolts as u256) * lower_max
     let max_denominator = upper_min + lower_max
 
-    Option::Some(Assessment {
-        min_floor_uv: min_numerator / min_denominator,
-        max_ceil_uv: (max_numerator + max_denominator - 1) / max_denominator,
-        within_limit: max_numerator <= (limit.microvolts as u256) * max_denominator,
-    })
+    Option::Some(assessment_for_ratio_bounds(
+        input_min,
+        input_max,
+        lower_min,
+        min_denominator,
+        lower_max,
+        max_denominator,
+        limit,
+    ))
+}
+
+/// Bounds a divider output loaded by an ADC input resistance. Invalid inputs return None.
+pub fn assess_loaded(input_min: Voltage, input_max: Voltage, upper: Resistor, lower: Resistor, load: Load, limit: Voltage) -> Option<Assessment> {
+    if input_min.microvolts > input_max.microvolts
+        || upper.ohms == 0 || lower.ohms == 0 || load.ohms == 0
+        || upper.tolerance_bps >= 10_000
+        || lower.tolerance_bps >= 10_000
+        || load.tolerance_bps >= 10_000 {
+        return Option::None
+    }
+
+    let upper_nominal = upper.ohms as u256
+    let lower_nominal = lower.ohms as u256
+    let load_nominal = load.ohms as u256
+    let upper_tolerance = upper.tolerance_bps as u256
+    let lower_tolerance = lower.tolerance_bps as u256
+    let load_tolerance = load.tolerance_bps as u256
+
+    let upper_min = upper_nominal * (BPS - upper_tolerance)
+    let upper_max = upper_nominal * (BPS + upper_tolerance)
+    let lower_min = lower_nominal * (BPS - lower_tolerance)
+    let lower_max = lower_nominal * (BPS + lower_tolerance)
+    let load_min = load_nominal * (BPS - load_tolerance)
+    let load_max = load_nominal * (BPS + load_tolerance)
+
+    // The divider's lower leg is lower || load. Shared BPS scale factors cancel.
+    let min_numerator = lower_min * load_min
+    let min_denominator = upper_max * (lower_min + load_min) + min_numerator
+    let max_numerator = lower_max * load_max
+    let max_denominator = upper_min * (lower_max + load_max) + max_numerator
+
+    Option::Some(assessment_for_ratio_bounds(
+        input_min,
+        input_max,
+        min_numerator,
+        min_denominator,
+        max_numerator,
+        max_denominator,
+        limit,
+    ))
 }
 
 #[test]
@@ -53,6 +121,7 @@ fn nominally_safe_divider_can_exceed_limit() {
         lower: Resistor { ohms: 20_000, tolerance_bps: 100 },
         limit: Voltage { microvolts: 3_300_000 },
     ).unwrap()
+
     assert!(result.min_floor_uv == 3_277_926)
     assert!(result.max_ceil_uv == 3_321_927)
     assert!(!result.within_limit)
@@ -67,6 +136,7 @@ fn exact_limit_is_inclusive() {
         lower: Resistor { ohms: 1, tolerance_bps: 0 },
         limit: Voltage { microvolts: 5 },
     ).unwrap()
+
     assert!(result.min_floor_uv == 0)
     assert!(result.max_ceil_uv == 5)
     assert!(result.within_limit)
@@ -81,6 +151,7 @@ fn fractional_excess_fails() {
         lower: Resistor { ohms: 1, tolerance_bps: 0 },
         limit: Voltage { microvolts: 5 },
     ).unwrap()
+
     assert!(result.min_floor_uv == 5)
     assert!(result.max_ceil_uv == 6)
     assert!(!result.within_limit)
@@ -95,5 +166,50 @@ fn rejects_zero_resistance() {
         lower: Resistor { ohms: 1, tolerance_bps: 0 },
         limit: Voltage { microvolts: 5 },
     )
+
+    assert!(result.is_none())
+}
+
+#[test]
+fn adc_input_load_reduces_divider_output() {
+    let result = assess_loaded(
+        input_min: Voltage { microvolts: 10_000_000 },
+        input_max: Voltage { microvolts: 10_000_000 },
+        upper: Resistor { ohms: 10_000, tolerance_bps: 0 },
+        lower: Resistor { ohms: 10_000, tolerance_bps: 0 },
+        load: Load { ohms: 10_000, tolerance_bps: 0 },
+        limit: Voltage { microvolts: 3_400_000 },
+    ).unwrap()
+
+    assert!(result.min_floor_uv == 3_333_333)
+    assert!(result.max_ceil_uv == 3_333_334)
+    assert!(result.within_limit)
+}
+
+#[test]
+fn loaded_output_uses_exact_fraction_for_limit() {
+    let result = assess_loaded(
+        input_min: Voltage { microvolts: 10_000_000 },
+        input_max: Voltage { microvolts: 10_000_000 },
+        upper: Resistor { ohms: 10_000, tolerance_bps: 0 },
+        lower: Resistor { ohms: 10_000, tolerance_bps: 0 },
+        load: Load { ohms: 10_000, tolerance_bps: 0 },
+        limit: Voltage { microvolts: 3_333_333 },
+    ).unwrap()
+
+    assert!(!result.within_limit)
+}
+
+#[test]
+fn rejects_invalid_load() {
+    let result = assess_loaded(
+        input_min: Voltage { microvolts: 0 },
+        input_max: Voltage { microvolts: 10 },
+        upper: Resistor { ohms: 1, tolerance_bps: 0 },
+        lower: Resistor { ohms: 1, tolerance_bps: 0 },
+        load: Load { ohms: 0, tolerance_bps: 0 },
+        limit: Voltage { microvolts: 5 },
+    )
+
     assert!(result.is_none())
 }
