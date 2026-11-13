@@ -63,10 +63,10 @@ pub fn assess(input_min: Voltage, input_max: Voltage, upper: Resistor, lower: Re
     Option::Some(assessment_for_ratio_bounds(
         input_min,
         input_max,
-        lower_min,
-        min_denominator,
-        lower_max,
-        max_denominator,
+        min_ratio_numerator: lower_min,
+        min_ratio_denominator: min_denominator,
+        max_ratio_numerator: lower_max,
+        max_ratio_denominator: max_denominator,
         limit,
     ))
 }
@@ -104,10 +104,10 @@ pub fn assess_loaded(input_min: Voltage, input_max: Voltage, upper: Resistor, lo
     Option::Some(assessment_for_ratio_bounds(
         input_min,
         input_max,
-        min_numerator,
-        min_denominator,
-        max_numerator,
-        max_denominator,
+        min_ratio_numerator: min_numerator,
+        min_ratio_denominator: min_denominator,
+        max_ratio_numerator: max_numerator,
+        max_ratio_denominator: max_denominator,
         limit,
     ))
 }
