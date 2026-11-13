@@ -1,0 +1,20 @@
+name: Fe checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Fe 26.6.0
+        run: |
+          curl --fail --location --silent --show-error https://github.com/argotorg/fe/releases/download/v26.6.0/fe_linux_amd64 --output fe
+          echo "697081cb9265bd1be7a5d33e6bb0c8559ee5ff542abab9a046540fc151b4edaa  fe" | sha256sum --check
+          chmod +x fe
+      - name: Check project
+        run: ./fe check .
+      - name: Run tests
+        run: ./fe test .
