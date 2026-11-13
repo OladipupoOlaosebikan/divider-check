@@ -12,7 +12,11 @@ fe check .
 fe test .
 ```
 
-The test named `nominally_safe_divider_can_exceed_limit` is the demo. A 4.95 V input with 10 kΩ above the tap and 20 kΩ below it gives exactly 3.30 V at nominal values. With independent ±1% resistor tolerances, the enclosing output interval is 3.277926 V to 3.321927 V. The assessment flags the upper limit as exceeded. For the loaded model, 10 kΩ upper, lower, and ADC input resistances make the effective lower leg 5 kΩ, so a 10 V input produces 3.333333… V.
+## Worked examples
+
+The test named `nominally_safe_divider_can_exceed_limit` shows why nominal calculations can be misleading. A 4.95 V input with 10 kΩ above the tap and 20 kΩ below it gives exactly 3.30 V at nominal values. With independent ±1% resistor tolerances, the output interval widens to 3.277926–3.321927 V, so it can exceed a 3.30 V ADC limit.
+
+The loaded tests use a 10 V input and 10 kΩ for each of the upper resistor, lower resistor, and ADC input resistance. Without the ADC load, the divider outputs 5 V. With the load, the effective lower leg is 10 kΩ || 10 kΩ = 5 kΩ and the output is exactly 10/3 V. The returned whole-microvolt bounds are 3,333,333–3,333,334 µV. A 3,400,000 µV limit passes, while a 3,333,333 µV limit fails because the exact value is one third of a microvolt above it. This demonstrates why the limit check compares exact integers before rounding.
 
 ## How it works
 
